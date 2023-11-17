@@ -1,7 +1,7 @@
 use std::fmt::Display;
 
 use clap::{self, command, error::ErrorKind, CommandFactory, Parser};
-use crossterm::style;
+use crossterm::{style, style::Color};
 use image::{open, ImageBuffer, Rgb};
 
 // <Width> / <Height> = <Font aspect ratio>
@@ -11,6 +11,7 @@ const FONT_ASPECT_RATIO: f32 = 8.0 / 17.0; // or 2.0 / 3.0;
 pub enum ShadeMethod {
     Ascii,
     Blocks,
+    Half,
     Custom(Option<String>),
 }
 
@@ -19,7 +20,17 @@ impl Display for ShadeMethod {
         match self {
             ShadeMethod::Ascii => write!(f, "ascii"),
             ShadeMethod::Blocks => write!(f, "blocks"),
+            ShadeMethod::Half => write!(f, "half"),
             ShadeMethod::Custom(_) => write!(f, "custom"),
+        }
+    }
+}
+
+impl ShadeMethod {
+    pub fn height_multiplier(&self) -> f32 {
+        match self {
+            ShadeMethod::Half => 2.0,
+            _ => 1.0,
         }
     }
 }
@@ -33,8 +44,8 @@ impl Display for ShadeMethod {
     author = env!("CARGO_PKG_AUTHORS"),
     about = format!("{}\nby {}", env!("CARGO_PKG_DESCRIPTION"), env!("CARGO_PKG_AUTHORS")),
     after_help = format!(
-        "Shade maps:\n{}\n\nExample usage:\n - {} .\\tests\\1.png -s 0.15 -m \" -:!|#@@@@@@@@\"\n - {} .\\tests\\2.jpg -s 1 -i -m ascii",
-        processing::SHADE_METHOD.iter().enumerate().map(|(_, (i, s))| format!("{}: '{}'", i, s)).collect::<Vec<String>>().join("\n"),
+        "Shade methods:\n{}\n\nExample usage:\n - {} .\\tests\\1.png -s 0.15 -m \" -:!|#@@@@@@@@\"\n - {} .\\tests\\2.jpg -s 1 -i -m ascii",
+        processing::SHADE_METHOD.iter().enumerate().map(|(_, (i, s))| format!(" - {}: '{}'", i, s)).collect::<Vec<String>>().join("\n"),
         env!("CARGO_PKG_NAME"),
         env!("CARGO_PKG_NAME")),
     arg_required_else_help = true)]
@@ -79,6 +90,7 @@ fn args() -> (Cli, ShadeMethod) {
     let shading = match args.shade_method.to_lowercase().as_str() {
         "ascii" => ShadeMethod::Ascii,
         "blocks" => ShadeMethod::Blocks,
+        "half" => ShadeMethod::Half,
         mapping => {
             if !mapping.is_empty() {
                 ShadeMethod::Custom(Some(mapping.to_string()))
@@ -105,6 +117,7 @@ fn main() {
         let aspect_adjust_height = img.height() as f32 * args.adjust_aspect_ratio;
         let scaled_width = img.width() as f32 * args.scale;
         let scaled_height = aspect_adjust_height as f32 * args.scale;
+        let scaled_height = scaled_height * shading.height_multiplier();
         img = image::imageops::resize(
             &img,
             scaled_width as u32,
@@ -112,7 +125,13 @@ fn main() {
             image::imageops::FilterType::Nearest,
         );
     }
-    display(&img, shading, args.invert, args.grayscale).unwrap();
+    if args.invert {
+        processing::invert_img(&mut img);
+    }
+    if args.grayscale {
+        processing::grayscale_img(&mut img);
+    }
+    display(&img, shading).unwrap();
 }
 
 // ======================== Utility ========================
@@ -125,10 +144,27 @@ pub fn load_image(path: &str) -> image::RgbImage {
 pub fn display(
     img: &ImageBuffer<Rgb<u8>, Vec<u8>>,
     shading: ShadeMethod,
-    invert: bool,
-    grayscale: bool,
 ) -> Result<(), std::io::Error> {
-    display_stream(&mut std::io::stdout(), img, shading, invert, grayscale)
+    let mut out = std::io::stdout();
+    match shading {
+        ShadeMethod::Half => display_stream_half(&mut out, img),
+        _ => display_stream_simple(&mut out, img, shading),
+    }
+}
+
+fn image_to_crossterm_color(pixel: Rgb<u8>) -> Color {
+    Color::Rgb {
+        r: pixel[0],
+        g: pixel[1],
+        b: pixel[2],
+    }
+}
+
+fn color_distance(a: Rgb<u8>, b: Rgb<u8>) -> f32 {
+    let a = [a[0] as f32, a[1] as f32, a[2] as f32];
+    let b = [b[0] as f32, b[1] as f32, b[2] as f32];
+    let dist = (a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2);
+    dist.sqrt()
 }
 
 // ======================== Image display ========================
@@ -137,46 +173,72 @@ fn print_stream(
     out: &mut dyn std::io::Write,
     chr: char,
     color: Rgb<u8>,
+    bg_color: Option<Rgb<u8>>,
 ) -> Result<(), std::io::Error> {
+    if let Some(bg_color) = bg_color {
+        write!(
+            out,
+            "{}",
+            style::SetBackgroundColor(image_to_crossterm_color(bg_color))
+        )?;
+    }
     write!(
         out,
         "{}{}{}",
-        style::SetForegroundColor(crossterm::style::Color::Rgb {
-            r: color[0],
-            g: color[1],
-            b: color[2],
-        },),
+        style::SetForegroundColor(image_to_crossterm_color(color)),
         chr,
         crossterm::style::ResetColor
     )
 }
 
-fn display_stream(
+fn display_stream_simple(
     out: &mut dyn std::io::Write,
     img: &ImageBuffer<Rgb<u8>, Vec<u8>>,
     shading: ShadeMethod,
-    invert: bool,
-    grayscale: bool,
 ) -> Result<(), std::io::Error> {
     let (width, height) = img.dimensions();
     for y in 0..height {
         for x in 0..width {
-            let mut pixel = *img.get_pixel(x, y);
-            if invert {
-                pixel = processing::invert(pixel);
-            }
-            if grayscale {
-                pixel = processing::grayscale(pixel);
-            }
+            let pixel = *img.get_pixel(x, y);
             let chr = processing::shade(pixel, &shading);
-            print_stream(out, chr, pixel)?;
+            print_stream(out, chr, pixel, None)?;
         }
         writeln!(out)?;
     }
     Ok(())
 }
 
-// ======================== Image pixel processing ========================
+/// Display the image in high resolution by performing subpixel rendering
+fn display_stream_half(
+    out: &mut dyn std::io::Write,
+    img: &ImageBuffer<Rgb<u8>, Vec<u8>>,
+) -> Result<(), std::io::Error> {
+    let (width, height) = img.dimensions();
+    const TRANSPARENT: Rgb<u8> = Rgb([0, 0, 0]);
+    for y in 0..(height / 2) {
+        for x in 0..width {
+            let upper = *img.get_pixel(x, y * 2);
+            let lower = *img.get_pixel(x, y * 2 + 1);
+            let upper_is_transparent = color_distance(upper, TRANSPARENT) < 80.0;
+            let lower_is_transparent = color_distance(lower, TRANSPARENT) < 80.0;
+            if upper_is_transparent && lower_is_transparent {
+                print_stream(out, ' ', upper, None)?;
+            } else if color_distance(upper, lower) < 10.0 {
+                print_stream(out, '█', upper, None)?;
+            } else if lower_is_transparent {
+                print_stream(out, '▀', upper, None)?;
+            } else if upper_is_transparent {
+                print_stream(out, '▄', lower, None)?;
+            } else {
+                print_stream(out, '▀', upper, Some(lower))?;
+            }
+        }
+        writeln!(out)?;
+    }
+    Ok(())
+}
+
+// ======================== Image processing ========================
 
 mod processing {
     use super::*;
@@ -184,6 +246,7 @@ mod processing {
     pub const SHADE_METHOD: &[(ShadeMethod, &str)] = &[
         (ShadeMethod::Ascii, " .-:=+*#%@"),
         (ShadeMethod::Blocks, " ░▒▓█"),
+        (ShadeMethod::Half, " ▄▀"),
         (ShadeMethod::Custom(None), "your characters here"),
     ];
 
@@ -199,11 +262,18 @@ mod processing {
             ShadeMethod::Ascii => shade_ascii(SHADE_METHOD[0].1),
             ShadeMethod::Blocks => shade_ascii(SHADE_METHOD[1].1),
             ShadeMethod::Custom(shade_map) => shade_ascii(shade_map.as_ref().unwrap()),
+            _ => panic!("Invalid shade method for single pixel"),
         }
     }
 
     pub fn invert(pixel: Rgb<u8>) -> Rgb<u8> {
         Rgb([255 - pixel[0], 255 - pixel[1], 255 - pixel[2]])
+    }
+
+    pub fn invert_img(img: &mut ImageBuffer<Rgb<u8>, Vec<u8>>) {
+        for pixel in img.pixels_mut() {
+            *pixel = invert(*pixel);
+        }
     }
 
     pub fn grayscale_value(pixel: Rgb<u8>) -> u8 {
@@ -215,5 +285,11 @@ mod processing {
         // TODO: Use a better grayscale algorithm
         let gray = grayscale_value(pixel);
         Rgb([gray, gray, gray])
+    }
+
+    pub fn grayscale_img(img: &mut ImageBuffer<Rgb<u8>, Vec<u8>>) {
+        for pixel in img.pixels_mut() {
+            *pixel = grayscale(*pixel);
+        }
     }
 }
