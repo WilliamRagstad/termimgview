@@ -295,7 +295,7 @@ mod processing {
     pub const SHADE_METHOD: &[(ShadeMethod, &str)] = &[
         (ShadeMethod::Ascii, " .-:=+*#%@"),
         (ShadeMethod::Blocks, " ░▒▓█"),
-        (ShadeMethod::Half, " ▄▀"),
+        (ShadeMethod::Half, " ▄▀█"),
         (ShadeMethod::Custom(None), "your characters here"),
     ];
 
