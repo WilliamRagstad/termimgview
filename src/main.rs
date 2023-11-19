@@ -77,16 +77,18 @@ struct Cli {
         default_value = "1",
         help = "Brightness of the image"
     )]
-    brightness: f32,
+    brightness: i32,
+    #[clap(short = 'c', long, default_value = "1", help = "Contrast of the image")]
+    contrast: f32,
     #[clap(
-        short = 'r',
+        short = 'u',
         long,
         default_value = "0",
         help = "Rotate the hue of the image"
     )]
-    hue_rotation: f32,
+    hue_rotation: i32,
     #[clap(
-        short = 'c',
+        short = 'r',
         long,
         default_value = "0,0,0",
         help = "Make color transparent"
@@ -167,6 +169,15 @@ fn main() {
     }
     if let Some(rm_bg_color) = rm_bg_color {
         processing::remove_bg_color(&mut img, rm_bg_color, args.rm_tolerance);
+    }
+    if args.brightness != 1 {
+        processing::brightness_img(&mut img, args.brightness);
+    }
+    if args.contrast != 1.0 {
+        processing::contrast_img(&mut img, args.contrast);
+    }
+    if args.hue_rotation != 0 {
+        processing::hue_rotate_img(&mut img, args.hue_rotation);
     }
     rendering::display(&img, shading).unwrap();
 }

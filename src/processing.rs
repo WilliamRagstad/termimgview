@@ -53,6 +53,18 @@ pub fn grayscale_img(img: &mut ImageBuffer<Rgba<u8>, Vec<u8>>) {
     }
 }
 
+pub fn brightness_img(img: &mut ImageBuffer<Rgba<u8>, Vec<u8>>, value: i32) {
+    image::imageops::brighten(img, value);
+}
+
+pub fn contrast_img(img: &mut ImageBuffer<Rgba<u8>, Vec<u8>>, value: f32) {
+    image::imageops::contrast(img, value);
+}
+
+pub fn hue_rotate_img(img: &mut ImageBuffer<Rgba<u8>, Vec<u8>>, value: i32) {
+    image::imageops::huerotate(img, value);
+}
+
 pub fn rgba_to_rgb(p: Rgba<u8>) -> Rgb<u8> {
     let a = p[3] as f32 / 255.0;
     Rgb([
